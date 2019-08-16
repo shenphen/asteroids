@@ -1,0 +1,24 @@
+{
+  "name": "asteroids",
+  "version": "1.0.0",
+  "description": "Famous \"Asteroids\" game written in Elm",
+  "main": "",
+  "scripts": {
+    "start": "elm-live src/Game.elm -p 8000 -e node_modules/.bin/elm --open",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shenphen/asteroids.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/shenphen/asteroids/issues"
+  },
+  "homepage": "https://github.com/shenphen/asteroids#readme",
+  "devDependencies": {
+    "elm": "^0.19.0-no-deps",
+    "elm-live": "^3.4.1"
+  }
+}

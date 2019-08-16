@@ -2,3 +2,9 @@
 elm-stuff
 # elm-repl generated files
 repl-temp-*
+
+# npm modules
+node_modules
+
+# vscode files
+.vscode

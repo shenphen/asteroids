@@ -1,11 +1,11 @@
 module Main exposing (main)
 
 import Browser
-import Browser.Events exposing (onKeyDown, onKeyUp)
+import Browser.Events exposing (onAnimationFrameDelta, onKeyDown, onKeyUp)
 import Html exposing (Html, br, button, div, text)
 import Json.Decode as Decode
 import Svg exposing (circle, path, svg)
-import Svg.Attributes exposing (cx, cy, d, fill, height, r, stroke, strokeWidth, transform, width)
+import Svg.Attributes exposing (cx, cy, d, fill, height, r, stroke, strokeWidth, style, transform, width)
 
 
 main =
@@ -16,14 +16,29 @@ main =
 -- CONSTANCES
 
 
-rotationSpeed : Int
+mapDimensions : { x : Int, y : Int }
+mapDimensions =
+    { x = 800, y = 600 }
+
+
+rotationSpeed : Float
 rotationSpeed =
-    3
+    7.5
+
+
+acceleration : Float
+acceleration =
+    0.0157812412326922
 
 
 maxSpeed : Float
 maxSpeed =
-    20
+    1.0
+
+
+spaceShipRadius : Float
+spaceShipRadius =
+    17.5
 
 
 backgroundColor =
@@ -38,7 +53,8 @@ type Msg
     = Rotate Direction
     | Shield Bool
     | Shoot Bool
-    | Forwards
+    | Accelerate
+    | UpdatePosition Float
     | None
 
 
@@ -48,11 +64,11 @@ type Direction
 
 
 type alias Vec2 =
-    ( Float, Float )
+    { x : Float, y : Float }
 
 
 type alias Model =
-    { rotation : Int
+    { rotation : Float
     , speed : Vec2
     , position : Vec2
     , shield : Bool
@@ -67,8 +83,8 @@ type alias Model =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { rotation = 0
-      , speed = ( 0, 0 )
-      , position = ( 0, 0 )
+      , speed = { x = 0, y = 0 }
+      , position = { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 }
       , shield = False
       , shooting = False
       }
@@ -86,13 +102,16 @@ update msg model =
         Rotate dir ->
             case dir of
                 Left ->
-                    ( { model | rotation = modBy 360 (model.rotation - rotationSpeed) }, Cmd.none )
+                    ( { model | rotation = modByFloat 360 (model.rotation - rotationSpeed) }, Cmd.none )
 
                 Right ->
-                    ( { model | rotation = modBy 360 (model.rotation + rotationSpeed) }, Cmd.none )
+                    ( { model | rotation = modByFloat 360 (model.rotation + rotationSpeed) }, Cmd.none )
 
-        Forwards ->
-            ( { model | speed = calcSpeed model.speed model.rotation }, Cmd.none )
+        Accelerate ->
+            ( { model | speed = updateSpeed model.speed model.rotation }, Cmd.none )
+
+        UpdatePosition deltaTime ->
+            ( { model | position = updatePosition model deltaTime }, Cmd.none )
 
         Shield state ->
             ( { model | shield = state }, Cmd.none )
@@ -104,16 +123,28 @@ update msg model =
             ( model, Cmd.none )
 
 
-calcSpeed : Vec2 -> Int -> Vec2
-calcSpeed ( speedX, speedY ) rotation =
-    ( inAbsoluteRange maxSpeed (speedX + sin (degrees (toFloat rotation)))
-    , inAbsoluteRange maxSpeed (speedY + cos (degrees (toFloat rotation)))
-    )
+updateSpeed : Vec2 -> Float -> Vec2
+updateSpeed speed rotation =
+    { x = inAbsoluteRange maxSpeed (speed.x + acceleration * sin (degrees rotation))
+    , y = inAbsoluteRange maxSpeed (speed.y - acceleration * cos (degrees rotation))
+    }
 
 
 inAbsoluteRange : Float -> Float -> Float
 inAbsoluteRange absoluteValue value =
     max -absoluteValue (min value absoluteValue)
+
+
+updatePosition : Model -> Float -> Vec2
+updatePosition model deltaTime =
+    { x = inNonNegativeRange mapDimensions.x (model.position.x + model.speed.x * deltaTime)
+    , y = inNonNegativeRange mapDimensions.y (model.position.y + model.speed.y * deltaTime)
+    }
+
+
+inNonNegativeRange : Int -> Float -> Float
+inNonNegativeRange maxValue value =
+    modByFloat maxValue value
 
 
 
@@ -122,7 +153,17 @@ inAbsoluteRange absoluteValue value =
 
 view : Model -> Html Msg
 view model =
-    div []
+    div
+        [ style
+            (String.concat
+                [ "position: relative; overflow: hidden; border: solid 1px #000; width: "
+                , String.fromInt mapDimensions.x
+                , "px; height: "
+                , String.fromInt mapDimensions.y
+                , "px;"
+                ]
+            )
+        ]
         [ spaceShip model
         , debugModel model
         ]
@@ -130,32 +171,49 @@ view model =
 
 spaceShip : Model -> Html Msg
 spaceShip model =
-    svg
-        [ width "35"
-        , height "35"
-        ]
-        [ spaceShipShield model.shield
-        , circle [ cx "17.5", cy "17.5", r "17.25", fill backgroundColor ] []
-        , path
-            [ d "M30 28.75L17.5 23.76L5 28.75L17.5 0.75L30 28.75Z"
-            , fill "#000000"
-            , strokeWidth "0"
-            , transform (String.concat [ "rotate(", String.fromInt model.rotation, ", 17.5, 17.5)" ])
+    let
+        radiusString =
+            String.fromFloat spaceShipRadius
+
+        xTransform =
+            String.fromFloat (model.position.x - spaceShipRadius)
+
+        yTransform =
+            String.fromFloat (model.position.y - spaceShipRadius)
+
+        diameterString =
+            String.fromFloat (spaceShipRadius * 2)
+    in
+    div [ style (String.concat [ "transform: translate(", xTransform, "px, ", yTransform, "px);" ]) ]
+        [ svg
+            [ width diameterString
+            , height diameterString
             ]
-            []
+            [ spaceShipShield model.shield
+            , circle [ cx radiusString, cy radiusString, r "17", fill backgroundColor ] []
+            , path
+                [ d "M30 28.75L17.5 23.76L5 28.75L17.5 0.75L30 28.75Z"
+                , fill "#000000"
+                , strokeWidth "0"
+                , transform (String.concat [ "rotate(", String.fromFloat model.rotation, ", ", radiusString, ", ", radiusString, ")" ])
+                ]
+                []
+            ]
         ]
 
 
 debugModel : Model -> Html Msg
 debugModel model =
-    div []
-        [ text (String.concat [ "Rotation: ", String.fromInt model.rotation ])
+    div [ style "position: fixed; bottom: 0px; left: 0px;" ]
+        [ text (String.concat [ "Rotation: ", String.fromFloat model.rotation ])
         , br [] []
-        , text (String.concat [ "Cos rotation: ", String.fromFloat (cos (degrees (toFloat model.rotation))) ])
+        , text (String.concat [ "Cos rotation: ", String.fromFloat (cos (degrees model.rotation)) ])
         , br [] []
-        , text (String.concat [ "Sin rotation: ", String.fromFloat (sin (degrees (toFloat model.rotation))) ])
+        , text (String.concat [ "Sin rotation: ", String.fromFloat (sin (degrees model.rotation)) ])
         , br [] []
-        , text (String.concat [ "Speed: x = ", String.fromFloat (Tuple.first model.speed), ", y = ", String.fromFloat (Tuple.second model.speed) ])
+        , text (String.concat [ "Position: x = ", String.fromFloat model.position.x, ", y = ", String.fromFloat model.position.y ])
+        , br [] []
+        , text (String.concat [ "Speed: x = ", String.fromFloat model.speed.x, ", y = ", String.fromFloat model.speed.y ])
         , br [] []
         , text (String.concat [ "Shield: ", boolToString model.shield ])
         , br [] []
@@ -192,7 +250,13 @@ subscriptions model =
     Sub.batch
         [ onKeyDown (keyDecoder keyDownToMsg)
         , onKeyUp (keyDecoder keyUpToMsg)
+        , onAnimationFrameDelta onAnimationUpdate
         ]
+
+
+onAnimationUpdate : Float -> Msg
+onAnimationUpdate deltaTime =
+    UpdatePosition deltaTime
 
 
 keyDecoder : (String -> Msg) -> Decode.Decoder Msg
@@ -210,7 +274,7 @@ keyDownToMsg string =
             Rotate Right
 
         "ArrowUp" ->
-            Forwards
+            Accelerate
 
         "Space" ->
             Shoot True
@@ -233,3 +297,23 @@ keyUpToMsg string =
 
         _ ->
             None
+
+
+
+-- HELPERS
+
+
+modByFloat : Int -> Float -> Float
+modByFloat modulo value =
+    let
+        intValue =
+            round value
+
+        base =
+            modBy modulo intValue
+                |> toFloat
+
+        rest =
+            abs (value - toFloat intValue)
+    in
+    base + rest

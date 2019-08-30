@@ -4,8 +4,9 @@ import Browser
 import Browser.Events exposing (onAnimationFrameDelta, onKeyDown, onKeyUp)
 import Html exposing (Html, br, button, div, text)
 import Json.Decode as Decode
-import Svg exposing (circle, path, svg)
-import Svg.Attributes exposing (cx, cy, d, fill, height, r, stroke, strokeWidth, style, transform, width)
+import Round exposing (roundNum)
+import Svg exposing (circle, g, path, svg)
+import Svg.Attributes exposing (cx, cy, d, fill, height, opacity, r, stroke, strokeWidth, style, transform, width)
 
 
 main =
@@ -23,26 +24,22 @@ mapDimensions =
 
 rotationSpeed : Float
 rotationSpeed =
-    7.5
+    7.4335
 
 
 acceleration : Float
 acceleration =
-    0.0157812412326922
+    0.0211
 
 
 maxSpeed : Float
 maxSpeed =
-    1.0
+    0.7
 
 
 spaceShipRadius : Float
 spaceShipRadius =
     17.5
-
-
-backgroundColor =
-    "#ffffff"
 
 
 
@@ -53,7 +50,7 @@ type Msg
     = Rotate Direction
     | Shield Bool
     | Shoot Bool
-    | Accelerate
+    | Accelerate Bool
     | UpdatePosition Float
     | None
 
@@ -73,6 +70,7 @@ type alias Model =
     , position : Vec2
     , shield : Bool
     , shooting : Bool
+    , engine : Bool
     }
 
 
@@ -87,6 +85,7 @@ init _ =
       , position = { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 }
       , shield = False
       , shooting = False
+      , engine = False
       }
     , Cmd.none
     )
@@ -107,8 +106,8 @@ update msg model =
                 Right ->
                     ( { model | rotation = modByFloat 360 (model.rotation + rotationSpeed) }, Cmd.none )
 
-        Accelerate ->
-            ( { model | speed = updateSpeed model.speed model.rotation }, Cmd.none )
+        Accelerate engine ->
+            ( { model | speed = updateSpeed model.speed model.rotation, engine = engine }, Cmd.none )
 
         UpdatePosition deltaTime ->
             ( { model | position = updatePosition model deltaTime }, Cmd.none )
@@ -125,8 +124,8 @@ update msg model =
 
 updateSpeed : Vec2 -> Float -> Vec2
 updateSpeed speed rotation =
-    { x = inAbsoluteRange maxSpeed (speed.x + acceleration * sin (degrees rotation))
-    , y = inAbsoluteRange maxSpeed (speed.y - acceleration * cos (degrees rotation))
+    { x = (speed.x + acceleration * sin (degrees rotation)) |> toFixed 4
+    , y = (speed.y - acceleration * cos (degrees rotation)) |> toFixed 4
     }
 
 
@@ -137,8 +136,15 @@ inAbsoluteRange absoluteValue value =
 
 updatePosition : Model -> Float -> Vec2
 updatePosition model deltaTime =
-    { x = inNonNegativeRange mapDimensions.x (model.position.x + model.speed.x * deltaTime)
-    , y = inNonNegativeRange mapDimensions.y (model.position.y + model.speed.y * deltaTime)
+    let
+        updatedX =
+            model.position.x + model.speed.x * deltaTime
+
+        updatedY =
+            model.position.y + model.speed.y * deltaTime
+    in
+    { x = updatedX |> inNonNegativeRange mapDimensions.x
+    , y = updatedY |> inNonNegativeRange mapDimensions.y
     }
 
 
@@ -183,23 +189,48 @@ spaceShip model =
 
         diameterString =
             String.fromFloat (spaceShipRadius * 2)
+
+        shieldOpacity =
+            getOpacity model.shield
+
+        engineGlowOpacity =
+            getOpacity model.engine
     in
     div [ style (String.concat [ "transform: translate(", xTransform, "px, ", yTransform, "px);" ]) ]
         [ svg
             [ width diameterString
             , height diameterString
             ]
-            [ spaceShipShield model.shield
-            , circle [ cx radiusString, cy radiusString, r "17", fill backgroundColor ] []
-            , path
-                [ d "M30 28.75L17.5 23.76L5 28.75L17.5 0.75L30 28.75Z"
-                , fill "#000000"
-                , strokeWidth "0"
-                , transform (String.concat [ "rotate(", String.fromFloat model.rotation, ", ", radiusString, ", ", radiusString, ")" ])
+            [ circle [ cx "17.5", cy "17.5", r "17.5", fill "#000000", opacity shieldOpacity ] []
+            , circle [ cx radiusString, cy radiusString, r "17", fill "#ffffff" ] []
+            , g [ transform (String.concat [ "rotate(", String.fromFloat model.rotation, ", ", radiusString, ", ", radiusString, ")" ]) ]
+                [ path
+                    [ d "M15.05 26.58L17.09 30.65L19.14 26.58L21.19 32.33L21.19 20.83L13 20.83L13 32.33L15.05 26.58Z"
+                    , fill "#2d9cda"
+                    , stroke "#000000"
+                    , strokeWidth "0.5"
+                    , opacity engineGlowOpacity
+                    ]
+                    []
+                , path
+                    [ d "M30 28.75L17.5 23.76L5 28.75L17.5 0.75L30 28.75Z"
+                    , fill "#000000"
+                    , strokeWidth "0"
+                    ]
+                    []
                 ]
-                []
             ]
         ]
+
+
+getOpacity : Bool -> String
+getOpacity condition =
+    case condition of
+        True ->
+            "1"
+
+        False ->
+            "0"
 
 
 debugModel : Model -> Html Msg
@@ -207,7 +238,7 @@ debugModel model =
     div [ style "position: fixed; bottom: 0px; left: 0px;" ]
         [ text (String.concat [ "Rotation: ", String.fromFloat model.rotation ])
         , br [] []
-        , text (String.concat [ "Cos rotation: ", String.fromFloat (cos (degrees model.rotation)) ])
+        , text (String.concat [ "Cos rotation: ", String.fromFloat -(cos (degrees model.rotation)) ])
         , br [] []
         , text (String.concat [ "Sin rotation: ", String.fromFloat (sin (degrees model.rotation)) ])
         , br [] []
@@ -229,16 +260,6 @@ boolToString bool =
 
         False ->
             "False"
-
-
-spaceShipShield : Bool -> Html Msg
-spaceShipShield shield =
-    case shield of
-        True ->
-            circle [ cx "17.5", cy "17.5", r "17.5" ] []
-
-        False ->
-            circle [ cx "17.5", cy "17.5", r "17.5", fill backgroundColor ] []
 
 
 
@@ -274,7 +295,7 @@ keyDownToMsg string =
             Rotate Right
 
         "ArrowUp" ->
-            Accelerate
+            Accelerate True
 
         "Space" ->
             Shoot True
@@ -292,6 +313,9 @@ keyUpToMsg string =
         "ShiftLeft" ->
             Shield False
 
+        "ArrowUp" ->
+            Accelerate False
+
         "Space" ->
             Shoot False
 
@@ -307,7 +331,7 @@ modByFloat : Int -> Float -> Float
 modByFloat modulo value =
     let
         intValue =
-            round value
+            floor value
 
         base =
             modBy modulo intValue
@@ -316,4 +340,9 @@ modByFloat modulo value =
         rest =
             abs (value - toFloat intValue)
     in
-    base + rest
+    base + toFixed 4 rest
+
+
+toFixed : Int -> Float -> Float
+toFixed fixedPos =
+    roundNum fixedPos

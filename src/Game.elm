@@ -42,6 +42,16 @@ spaceShipRadius =
     17.5
 
 
+fireRateAfterShoot : Float
+fireRateAfterShoot =
+    200
+
+
+fireLifeTime : Float
+fireLifeTime =
+    1200
+
+
 
 -- TYPES
 
@@ -51,7 +61,7 @@ type Msg
     | Shield Bool
     | Shoot Bool
     | Accelerate Bool
-    | UpdatePosition Float
+    | UpdateFrame Float
     | None
 
 
@@ -60,17 +70,43 @@ type Direction
     | Right
 
 
+type LifeTime
+    = Finite Float
+    | Infinite
+
+
+type alias ShipModel =
+    { rotation : Float
+    , move : Movable
+    , shield : Bool
+    , engine : Bool
+    , fireRate : Float
+    }
+
+
+type alias Movable =
+    { vel : Vec2
+    , pos : Vec2
+    , kind : MovableKind
+    , timeLeft : LifeTime
+    }
+
+
 type alias Vec2 =
     { x : Float, y : Float }
 
 
+type MovableKind
+    = Ship
+    | ShipFire
+    | Asteroid
+    | Enemy
+    | EnemyFire
+
+
 type alias Model =
-    { rotation : Float
-    , speed : Vec2
-    , position : Vec2
-    , shield : Bool
-    , shooting : Bool
-    , engine : Bool
+    { ship : ShipModel
+    , shipFire : List Movable
     }
 
 
@@ -80,12 +116,19 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { rotation = 0
-      , speed = { x = 0, y = 0 }
-      , position = { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 }
-      , shield = False
-      , shooting = False
-      , engine = False
+    ( { ship =
+            { rotation = 0
+            , move =
+                { vel = { x = 0, y = 0 }
+                , pos = { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 }
+                , kind = Ship
+                , timeLeft = Infinite
+                }
+            , shield = False
+            , engine = False
+            , fireRate = 0
+            }
+      , shipFire = []
       }
     , Cmd.none
     )
@@ -97,55 +140,144 @@ init _ =
 
 update : Msg -> Model -> ( Model, Cmd msg )
 update msg model =
+    let
+        modelShip =
+            model.ship
+
+        canShoot =
+            model.ship.fireRate == 0
+    in
     case msg of
         Rotate dir ->
-            case dir of
-                Left ->
-                    ( { model | rotation = modByFloat 360 (model.rotation - rotationSpeed) }, Cmd.none )
-
-                Right ->
-                    ( { model | rotation = modByFloat 360 (model.rotation + rotationSpeed) }, Cmd.none )
+            ( { model | ship = updateShipRotation modelShip dir }, Cmd.none )
 
         Accelerate engine ->
-            ( { model | speed = updateSpeed model.speed model.rotation, engine = engine }, Cmd.none )
+            ( { model | ship = updateShipSpeed modelShip engine }, Cmd.none )
 
-        UpdatePosition deltaTime ->
-            ( { model | position = updatePosition model deltaTime }, Cmd.none )
+        UpdateFrame deltaTime ->
+            ( updateFrame model deltaTime, Cmd.none )
 
         Shield state ->
-            ( { model | shield = state }, Cmd.none )
+            ( { model | ship = updateShipShield modelShip state }, Cmd.none )
 
-        Shoot state ->
-            ( { model | shooting = state }, Cmd.none )
+        Shoot fireButtonPressed ->
+            case fireButtonPressed && canShoot of
+                True ->
+                    ( { model
+                        | shipFire = updateShipFire model
+                        , ship = { modelShip | fireRate = fireRateAfterShoot }
+                      }
+                    , Cmd.none
+                    )
+
+                False ->
+                    ( model, Cmd.none )
 
         None ->
             ( model, Cmd.none )
 
 
-updateSpeed : Vec2 -> Float -> Vec2
-updateSpeed speed rotation =
-    { x = (speed.x + acceleration * sin (degrees rotation)) |> toFixed 4
-    , y = (speed.y - acceleration * cos (degrees rotation)) |> toFixed 4
-    }
+updateShipRotation : ShipModel -> Direction -> ShipModel
+updateShipRotation shipModel dir =
+    case dir of
+        Left ->
+            { shipModel | rotation = modByFloat 360 (shipModel.rotation - rotationSpeed) }
+
+        Right ->
+            { shipModel | rotation = modByFloat 360 (shipModel.rotation + rotationSpeed) }
 
 
-inAbsoluteRange : Float -> Float -> Float
-inAbsoluteRange absoluteValue value =
-    max -absoluteValue (min value absoluteValue)
-
-
-updatePosition : Model -> Float -> Vec2
-updatePosition model deltaTime =
+updateShipSpeed : ShipModel -> Bool -> ShipModel
+updateShipSpeed shipModel engine =
     let
-        updatedX =
-            model.position.x + model.speed.x * deltaTime
+        move =
+            shipModel.move
 
-        updatedY =
-            model.position.y + model.speed.y * deltaTime
+        newVel =
+            { x = move.vel.x + acceleration * sin (degrees shipModel.rotation)
+            , y = move.vel.y - acceleration * cos (degrees shipModel.rotation)
+            }
+
+        newMove =
+            { move | vel = newVel }
     in
-    { x = updatedX |> inNonNegativeRange mapDimensions.x
-    , y = updatedY |> inNonNegativeRange mapDimensions.y
+    { shipModel | move = newMove, engine = engine }
+
+
+updateFrame : Model -> Float -> Model
+updateFrame model deltaTime =
+    { model
+        | ship = updateShip model.ship deltaTime
+        , shipFire =
+            model.shipFire
+                |> List.map (\x -> updateLifeTime x deltaTime)
+                |> List.filter isAlive
+                |> List.map (\x -> updatePosition x deltaTime)
     }
+
+
+updateShip : ShipModel -> Float -> ShipModel
+updateShip shipModel deltaTime =
+    { shipModel
+        | move = updatePosition shipModel.move deltaTime
+        , fireRate = max 0 (shipModel.fireRate - deltaTime)
+    }
+
+
+updatePosition : Movable -> Float -> Movable
+updatePosition move deltaTime =
+    let
+        newPos =
+            { x = inNonNegativeRange mapDimensions.x (move.pos.x + move.vel.x * deltaTime)
+            , y = inNonNegativeRange mapDimensions.y (move.pos.y + move.vel.y * deltaTime)
+            }
+    in
+    { move | pos = newPos }
+
+
+isAlive : Movable -> Bool
+isAlive move =
+    case move.timeLeft of
+        Infinite ->
+            True
+
+        Finite left ->
+            left > 0
+
+
+updateLifeTime : Movable -> Float -> Movable
+updateLifeTime move deltaTime =
+    { move
+        | timeLeft =
+            case move.timeLeft of
+                Infinite ->
+                    Infinite
+
+                Finite left ->
+                    Finite (left - deltaTime)
+    }
+
+
+updateShipShield : ShipModel -> Bool -> ShipModel
+updateShipShield shipModel state =
+    { shipModel | shield = state }
+
+
+updateShipFire : Model -> List Movable
+updateShipFire { ship, shipFire } =
+    let
+        { move, rotation } =
+            ship
+
+        radians =
+            degrees rotation
+
+        vel =
+            { x = move.vel.x + 0.3 * sin radians
+            , y = move.vel.y - 0.3 * cos radians
+            }
+    in
+    shipFire ++ [ { kind = ShipFire, pos = move.pos, vel = vel, timeLeft = Finite fireLifeTime } ]
 
 
 inNonNegativeRange : Int -> Float -> Float
@@ -170,40 +302,44 @@ view model =
                 ]
             )
         ]
-        [ spaceShip model
-        , debugModel model
+        [ spaceShip model.ship
+        , renderMovableObjects model.shipFire
+        , debugShipModel model.ship
         ]
 
 
-spaceShip : Model -> Html Msg
-spaceShip model =
+spaceShip : ShipModel -> Html Msg
+spaceShip shipModel =
     let
         radiusString =
             String.fromFloat spaceShipRadius
 
         xTransform =
-            String.fromFloat (model.position.x - spaceShipRadius)
+            formatFloat (shipModel.move.pos.x - spaceShipRadius)
 
         yTransform =
-            String.fromFloat (model.position.y - spaceShipRadius)
+            formatFloat (shipModel.move.pos.y - spaceShipRadius)
+
+        rotation =
+            formatFloat shipModel.rotation
 
         diameterString =
             String.fromFloat (spaceShipRadius * 2)
 
         shieldOpacity =
-            getOpacity model.shield
+            getOpacity shipModel.shield
 
         engineGlowOpacity =
-            getOpacity model.engine
+            getOpacity shipModel.engine
     in
-    div [ style (String.concat [ "transform: translate(", xTransform, "px, ", yTransform, "px);" ]) ]
+    div [ style (String.concat [ "position: absolute; width: ", diameterString, "px; height: ", diameterString, "px; transform: translate(", xTransform, "px, ", yTransform, "px);" ]) ]
         [ svg
             [ width diameterString
             , height diameterString
             ]
             [ circle [ cx "17.5", cy "17.5", r "17.5", fill "#000000", opacity shieldOpacity ] []
             , circle [ cx radiusString, cy radiusString, r "17", fill "#ffffff" ] []
-            , g [ transform (String.concat [ "rotate(", String.fromFloat model.rotation, ", ", radiusString, ", ", radiusString, ")" ]) ]
+            , g [ transform (String.concat [ "rotate(", rotation, ", ", radiusString, ", ", radiusString, ")" ]) ]
                 [ path
                     [ d "M15.05 26.58L17.09 30.65L19.14 26.58L21.19 32.33L21.19 20.83L13 20.83L13 32.33L15.05 26.58Z"
                     , fill "#2d9cda"
@@ -223,6 +359,21 @@ spaceShip model =
         ]
 
 
+renderMovableObjects : List Movable -> Html Msg
+renderMovableObjects list =
+    div [] (List.map renderMovableObject list)
+
+
+renderMovableObject : Movable -> Html Msg
+renderMovableObject object =
+    case object.kind of
+        ShipFire ->
+            div [ style <| String.concat [ "position: absolute; width: 5px; height: 5px; background-color: #000; border-radius: 50%; transform: translate(", String.fromFloat (object.pos.x - 2.5), "px, ", String.fromFloat (object.pos.y - 2.5), "px);" ] ] []
+
+        _ ->
+            div [] []
+
+
 getOpacity : Bool -> String
 getOpacity condition =
     case condition of
@@ -233,22 +384,22 @@ getOpacity condition =
             "0"
 
 
-debugModel : Model -> Html Msg
-debugModel model =
+debugShipModel : ShipModel -> Html Msg
+debugShipModel shipModel =
     div [ style "position: fixed; bottom: 0px; left: 0px;" ]
-        [ text (String.concat [ "Rotation: ", String.fromFloat model.rotation ])
+        [ text (String.concat [ "Rotation: ", String.fromFloat shipModel.rotation ])
         , br [] []
-        , text (String.concat [ "Cos rotation: ", String.fromFloat -(cos (degrees model.rotation)) ])
+        , text (String.concat [ "Cos rotation: ", String.fromFloat -(cos (degrees shipModel.rotation)) ])
         , br [] []
-        , text (String.concat [ "Sin rotation: ", String.fromFloat (sin (degrees model.rotation)) ])
+        , text (String.concat [ "Sin rotation: ", String.fromFloat (sin (degrees shipModel.rotation)) ])
         , br [] []
-        , text (String.concat [ "Position: x = ", String.fromFloat model.position.x, ", y = ", String.fromFloat model.position.y ])
+        , text (String.concat [ "Position: x = ", String.fromFloat shipModel.move.pos.x, ", y = ", String.fromFloat shipModel.move.pos.y ])
         , br [] []
-        , text (String.concat [ "Speed: x = ", String.fromFloat model.speed.x, ", y = ", String.fromFloat model.speed.y ])
+        , text (String.concat [ "Speed: x = ", String.fromFloat shipModel.move.vel.x, ", y = ", String.fromFloat shipModel.move.vel.y ])
         , br [] []
-        , text (String.concat [ "Shield: ", boolToString model.shield ])
+        , text (String.concat [ "Shield: ", boolToString shipModel.shield ])
         , br [] []
-        , text (String.concat [ "Shoot: ", boolToString model.shooting ])
+        , text (String.concat [ "Shoot: ", String.fromFloat shipModel.fireRate ])
         ]
 
 
@@ -277,7 +428,7 @@ subscriptions model =
 
 onAnimationUpdate : Float -> Msg
 onAnimationUpdate deltaTime =
-    UpdatePosition deltaTime
+    UpdateFrame deltaTime
 
 
 keyDecoder : (String -> Msg) -> Decode.Decoder Msg
@@ -340,7 +491,14 @@ modByFloat modulo value =
         rest =
             abs (value - toFloat intValue)
     in
-    base + toFixed 4 rest
+    base + rest
+
+
+formatFloat : Float -> String
+formatFloat value =
+    value
+        |> toFixed 4
+        |> String.fromFloat
 
 
 toFixed : Int -> Float -> Float

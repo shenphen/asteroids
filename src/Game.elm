@@ -2,8 +2,10 @@ module Main exposing (main)
 
 import Browser
 import Browser.Events exposing (onAnimationFrameDelta, onKeyDown, onKeyUp)
-import Html exposing (Html, br, button, div, text)
+import Html exposing (Html, br, button, div, img, text)
+import Html.Attributes exposing (src)
 import Json.Decode as Decode
+import Random
 import Round exposing (roundNum)
 import Svg exposing (circle, g, path, svg)
 import Svg.Attributes exposing (cx, cy, d, fill, height, opacity, r, stroke, strokeWidth, style, transform, width)
@@ -17,7 +19,7 @@ main =
 -- CONSTANCES
 
 
-mapDimensions : { x : Int, y : Int }
+mapDimensions : MapDimensions
 mapDimensions =
     { x = 800, y = 600 }
 
@@ -42,14 +44,22 @@ spaceShipRadius =
     17.5
 
 
-fireRateAfterShoot : Float
-fireRateAfterShoot =
-    200
+fire =
+    { cooldown = 200
+    , lifeTime = 1200
+    , radius = 2.5
+    , speed = 0.3
+    }
 
 
-fireLifeTime : Float
-fireLifeTime =
-    1200
+asteroidRadius : Float
+asteroidRadius =
+    50
+
+
+seed : Random.Seed
+seed =
+    Random.initialSeed 22
 
 
 
@@ -85,15 +95,20 @@ type alias ShipModel =
 
 
 type alias Movable =
-    { vel : Vec2
-    , pos : Vec2
+    { pos : Vec2
+    , vel : Vec2
     , kind : MovableKind
+    , radius : Float
     , timeLeft : LifeTime
     }
 
 
 type alias Vec2 =
     { x : Float, y : Float }
+
+
+type alias MapDimensions =
+    { x : Int, y : Int }
 
 
 type MovableKind
@@ -106,7 +121,7 @@ type MovableKind
 
 type alias Model =
     { ship : ShipModel
-    , shipFire : List Movable
+    , movables : List Movable
     }
 
 
@@ -116,22 +131,84 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
+    let
+        ( asteroid1, seed1 ) =
+            randomMovable Asteroid seed
+
+        ( asteroid2, seed2 ) =
+            randomMovable Asteroid seed1
+
+        ( asteroid3, seed3 ) =
+            randomMovable Asteroid seed2
+    in
     ( { ship =
             { rotation = 0
-            , move =
-                { vel = { x = 0, y = 0 }
-                , pos = { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 }
-                , kind = Ship
-                , timeLeft = Infinite
-                }
+            , move = createMovable { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 } { x = 0, y = 0 } Ship
             , shield = False
             , engine = False
             , fireRate = 0
             }
-      , shipFire = []
+      , movables = [ asteroid1, asteroid2, asteroid3 ]
       }
     , Cmd.none
     )
+
+
+createMovable : Vec2 -> Vec2 -> MovableKind -> Movable
+createMovable pos vel kind =
+    case kind of
+        Ship ->
+            Movable pos vel kind spaceShipRadius Infinite
+
+        ShipFire ->
+            Movable pos vel kind fire.radius (Finite fire.lifeTime)
+
+        Asteroid ->
+            Movable pos vel kind asteroidRadius Infinite
+
+        _ ->
+            Movable pos vel kind 0 (Finite 0)
+
+
+randomMovable : MovableKind -> Random.Seed -> ( Movable, Random.Seed )
+randomMovable kind seed0 =
+    let
+        ( pos, seed1 ) =
+            randomPosition seed0
+
+        ( vel, seed2 ) =
+            randomVelocity seed1
+    in
+    case kind of
+        Asteroid ->
+            ( Movable pos vel kind asteroidRadius Infinite, seed2 )
+
+        _ ->
+            ( Movable pos vel kind 0 (Finite 0), seed0 )
+
+
+randomPosition : Random.Seed -> ( Vec2, Random.Seed )
+randomPosition seed0 =
+    let
+        ( x, seed1 ) =
+            Random.step (Random.float 0 (toFloat mapDimensions.x)) seed0
+
+        ( y, seed2 ) =
+            Random.step (Random.float 0 (toFloat mapDimensions.y)) seed1
+    in
+    ( Vec2 x y, seed2 )
+
+
+randomVelocity : Random.Seed -> ( Vec2, Random.Seed )
+randomVelocity seed0 =
+    let
+        ( x, seed1 ) =
+            Random.step (Random.float -0.2 0.2) seed0
+
+        ( y, seed2 ) =
+            Random.step (Random.float -0.2 0.2) seed1
+    in
+    ( Vec2 x y, seed2 )
 
 
 
@@ -164,8 +241,8 @@ update msg model =
             case fireButtonPressed && canShoot of
                 True ->
                     ( { model
-                        | shipFire = updateShipFire model
-                        , ship = { modelShip | fireRate = fireRateAfterShoot }
+                        | ship = { modelShip | fireRate = fire.cooldown }
+                        , movables = appendFire model
                       }
                     , Cmd.none
                     )
@@ -208,8 +285,8 @@ updateFrame : Model -> Float -> Model
 updateFrame model deltaTime =
     { model
         | ship = updateShip model.ship deltaTime
-        , shipFire =
-            model.shipFire
+        , movables =
+            model.movables
                 |> List.map (\x -> updateLifeTime x deltaTime)
                 |> List.filter isAlive
                 |> List.map (\x -> updatePosition x deltaTime)
@@ -263,8 +340,8 @@ updateShipShield shipModel state =
     { shipModel | shield = state }
 
 
-updateShipFire : Model -> List Movable
-updateShipFire { ship, shipFire } =
+appendFire : Model -> List Movable
+appendFire { ship, movables } =
     let
         { move, rotation } =
             ship
@@ -273,11 +350,11 @@ updateShipFire { ship, shipFire } =
             degrees rotation
 
         vel =
-            { x = move.vel.x + 0.3 * sin radians
-            , y = move.vel.y - 0.3 * cos radians
+            { x = move.vel.x + fire.speed * sin radians
+            , y = move.vel.y - fire.speed * cos radians
             }
     in
-    shipFire ++ [ { kind = ShipFire, pos = move.pos, vel = vel, timeLeft = Finite fireLifeTime } ]
+    movables ++ [ createMovable move.pos vel ShipFire ]
 
 
 inNonNegativeRange : Int -> Float -> Float
@@ -303,7 +380,7 @@ view model =
             )
         ]
         [ spaceShip model.ship
-        , renderMovableObjects model.shipFire
+        , renderMovableObjects model.movables
         , debugShipModel model.ship
         ]
 
@@ -366,9 +443,35 @@ renderMovableObjects list =
 
 renderMovableObject : Movable -> Html Msg
 renderMovableObject object =
+    let
+        fireDiameter =
+            2 * fire.radius |> String.fromFloat
+
+        asteroidDiameter =
+            2 * asteroidRadius |> String.fromFloat
+    in
     case object.kind of
         ShipFire ->
-            div [ style <| String.concat [ "position: absolute; width: 5px; height: 5px; background-color: #000; border-radius: 50%; transform: translate(", String.fromFloat (object.pos.x - 2.5), "px, ", String.fromFloat (object.pos.y - 2.5), "px);" ] ] []
+            div [ style <| String.concat [ "position: absolute; width: ", fireDiameter, "px; height: ", fireDiameter, "px; background-color: #000; border-radius: 50%; transform: translate(", String.fromFloat (object.pos.x - fire.radius), "px, ", String.fromFloat (object.pos.y - fire.radius), "px);" ] ] []
+
+        Asteroid ->
+            img
+                [ style <|
+                    String.concat
+                        [ "position: absolute; width: "
+                        , asteroidDiameter
+                        , "px; height: "
+                        , asteroidDiameter
+                        , "px;"
+                        , "transform: translate("
+                        , String.fromFloat (object.pos.x - asteroidRadius)
+                        , "px, "
+                        , String.fromFloat (object.pos.y - asteroidRadius)
+                        , "px);"
+                        ]
+                , src "/assets/asteroid.svg"
+                ]
+                []
 
         _ ->
             div [] []

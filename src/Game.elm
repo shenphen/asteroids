@@ -26,7 +26,7 @@ mapDimensions =
 
 rotationSpeed : Float
 rotationSpeed =
-    7.4335
+    0.4335
 
 
 acceleration : Float
@@ -67,11 +67,8 @@ seed =
 
 
 type Msg
-    = Rotate Direction
-    | Shield Bool
-    | Shoot Bool
-    | Accelerate Bool
-    | UpdateFrame Float
+    = UpdateFrame Float
+    | UpdateControl ControlInput
     | None
 
 
@@ -85,11 +82,18 @@ type LifeTime
     | Infinite
 
 
+type alias Control =
+    { rotate : Maybe Direction
+    , shield : Bool
+    , thrust : Bool
+    , shoot : Bool
+    }
+
+
 type alias ShipModel =
     { rotation : Float
     , move : Movable
-    , shield : Bool
-    , engine : Bool
+    , control : Control
     , fireRate : Float
     }
 
@@ -125,6 +129,13 @@ type alias Model =
     }
 
 
+type ControlInput
+    = Rotate (Maybe Direction)
+    | Shield Bool
+    | Shoot Bool
+    | Thrust Bool
+
+
 
 -- INIT
 
@@ -144,8 +155,12 @@ init _ =
     ( { ship =
             { rotation = 0
             , move = createMovable { x = toFloat mapDimensions.x / 2, y = toFloat mapDimensions.y / 2 } { x = 0, y = 0 } Ship
-            , shield = False
-            , engine = False
+            , control =
+                { rotate = Nothing
+                , shield = False
+                , thrust = False
+                , shoot = False
+                }
             , fireRate = 0
             }
       , movables = [ asteroid1, asteroid2, asteroid3 ]
@@ -217,76 +232,88 @@ randomVelocity seed0 =
 
 update : Msg -> Model -> ( Model, Cmd msg )
 update msg model =
-    let
-        modelShip =
-            model.ship
-
-        canShoot =
-            model.ship.fireRate == 0
-    in
     case msg of
-        Rotate dir ->
-            ( { model | ship = updateShipRotation modelShip dir }, Cmd.none )
-
-        Accelerate engine ->
-            ( { model | ship = updateShipSpeed modelShip engine }, Cmd.none )
+        UpdateControl input ->
+            ( { model | ship = updateInput model.ship input }, Cmd.none )
 
         UpdateFrame deltaTime ->
             ( updateFrame model deltaTime, Cmd.none )
-
-        Shield state ->
-            ( { model | ship = updateShipShield modelShip state }, Cmd.none )
-
-        Shoot fireButtonPressed ->
-            case fireButtonPressed && canShoot of
-                True ->
-                    ( { model
-                        | ship = { modelShip | fireRate = fire.cooldown }
-                        , movables = appendFire model
-                      }
-                    , Cmd.none
-                    )
-
-                False ->
-                    ( model, Cmd.none )
 
         None ->
             ( model, Cmd.none )
 
 
-updateShipRotation : ShipModel -> Direction -> ShipModel
-updateShipRotation shipModel dir =
+updateInput : ShipModel -> ControlInput -> ShipModel
+updateInput modelShip input =
+    let
+        control =
+            modelShip.control
+    in
+    case input of
+        Rotate dir ->
+            { modelShip | control = { control | rotate = dir } }
+
+        Shield shield ->
+            { modelShip | control = { control | shield = shield } }
+
+        Shoot shoot ->
+            { modelShip | control = { control | shoot = shoot } }
+
+        Thrust thrust ->
+            { modelShip | control = { control | thrust = thrust } }
+
+
+calcNewRotation : Float -> Maybe Direction -> Float -> Float
+calcNewRotation rotation dir deltaTime =
     case dir of
-        Left ->
-            { shipModel | rotation = modByFloat 360 (shipModel.rotation - rotationSpeed) }
+        Just Left ->
+            modByFloat 360 (rotation - rotationSpeed * deltaTime)
 
-        Right ->
-            { shipModel | rotation = modByFloat 360 (shipModel.rotation + rotationSpeed) }
+        Just Right ->
+            modByFloat 360 (rotation + rotationSpeed * deltaTime)
+
+        Nothing ->
+            rotation
 
 
-updateShipSpeed : ShipModel -> Bool -> ShipModel
-updateShipSpeed shipModel engine =
+updateShipSpeed : ShipModel -> Bool -> Movable
+updateShipSpeed shipModel thrust =
     let
         move =
             shipModel.move
 
-        newVel =
-            { x = move.vel.x + acceleration * sin (degrees shipModel.rotation)
-            , y = move.vel.y - acceleration * cos (degrees shipModel.rotation)
-            }
+        x =
+            move.vel.x + acceleration * sin (degrees shipModel.rotation) |> inAbsoluteRange maxSpeed
 
-        newMove =
-            { move | vel = newVel }
+        y =
+            move.vel.y - acceleration * cos (degrees shipModel.rotation) |> inAbsoluteRange maxSpeed
     in
-    { shipModel | move = newMove, engine = engine }
+    case thrust of
+        True ->
+            { move | vel = Vec2 x y }
+
+        False ->
+            move
 
 
 updateFrame : Model -> Float -> Model
 updateFrame model deltaTime =
+    let
+        hasShoot =
+            model.ship.fireRate == 0 && model.ship.control.shoot
+
+        movables =
+            case hasShoot of
+                True ->
+                    appendFire model
+
+                False ->
+                    model.movables
+    in
     { model
         | ship = updateShip model.ship deltaTime
         , movables =
-            model.movables
+            movables
                 |> List.map (\x -> updateLifeTime x deltaTime)
                 |> List.filter isAlive
                 |> List.map (\x -> updatePosition x deltaTime)
@@ -295,9 +322,29 @@ updateFrame model deltaTime =
 
 updateShip : ShipModel -> Float -> ShipModel
 updateShip shipModel deltaTime =
+    let
+        newRotation =
+            calcNewRotation shipModel.rotation shipModel.control.rotate deltaTime
+
+        newMove =
+            updateShipSpeed shipModel shipModel.control.thrust
+                |> (\move -> updatePosition move deltaTime)
+
+        hasShoot =
+            shipModel.fireRate == 0 && shipModel.control.shoot
+
+        newFireRate =
+            case hasShoot of
+                True ->
+                    fire.cooldown
+
+                False ->
+                    max 0 (shipModel.fireRate - deltaTime)
+    in
     { shipModel
-        | move = updatePosition shipModel.move deltaTime
-        , fireRate = max 0 (shipModel.fireRate - deltaTime)
+        | rotation = newRotation
+        , move = newMove
+        , fireRate = newFireRate
     }
 
 
@@ -335,11 +382,6 @@ updateLifeTime move deltaTime =
     }
 
 
-updateShipShield : ShipModel -> Bool -> ShipModel
-updateShipShield shipModel state =
-    { shipModel | shield = state }
-
-
 appendFire : Model -> List Movable
 appendFire { ship, movables } =
     let
@@ -360,6 +402,13 @@ appendFire { ship, movables } =
 inNonNegativeRange : Int -> Float -> Float
 inNonNegativeRange maxValue value =
     modByFloat maxValue value
+
+
+inAbsoluteRange : Float -> Float -> Float
+inAbsoluteRange range value =
+    value
+        |> max -range
+        |> min range
 
 
 
@@ -404,10 +453,10 @@ spaceShip shipModel =
             String.fromFloat (spaceShipRadius * 2)
 
         shieldOpacity =
-            getOpacity shipModel.shield
+            getOpacity shipModel.control.shield
 
-        engineGlowOpacity =
-            getOpacity shipModel.engine
+        thrustGlowOpacity =
+            getOpacity shipModel.control.thrust
     in
     div [ style (String.concat [ "position: absolute; width: ", diameterString, "px; height: ", diameterString, "px; transform: translate(", xTransform, "px, ", yTransform, "px);" ]) ]
         [ svg
@@ -422,7 +471,7 @@ spaceShip shipModel =
                     , fill "#2d9cda"
                     , stroke "#000000"
                     , strokeWidth "0.5"
-                    , opacity engineGlowOpacity
+                    , opacity thrustGlowOpacity
                     ]
                     []
                 , path
@@ -500,7 +549,7 @@ debugShipModel shipModel =
         , br [] []
         , text (String.concat [ "Speed: x = ", String.fromFloat shipModel.move.vel.x, ", y = ", String.fromFloat shipModel.move.vel.y ])
         , br [] []
-        , text (String.concat [ "Shield: ", boolToString shipModel.shield ])
+        , text (String.concat [ "Shield: ", boolToString shipModel.control.shield ])
         , br [] []
         , text (String.concat [ "Shoot: ", String.fromFloat shipModel.fireRate ])
         ]
@@ -523,8 +572,8 @@ boolToString bool =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
-        [ onKeyDown (keyDecoder keyDownToMsg)
-        , onKeyUp (keyDecoder keyUpToMsg)
+        [ onKeyDown (keyDecoder keyDownToInput)
+        , onKeyUp (keyDecoder keyUpToInput)
         , onAnimationFrameDelta onAnimationUpdate
         ]
 
@@ -534,47 +583,65 @@ onAnimationUpdate deltaTime =
     UpdateFrame deltaTime
 
 
-keyDecoder : (String -> Msg) -> Decode.Decoder Msg
-keyDecoder callback =
-    Decode.map callback (Decode.field "code" Decode.string)
+keyDecoder : (String -> Maybe ControlInput) -> Decode.Decoder Msg
+keyDecoder keyToInput =
+    Decode.field "code" Decode.string
+        |> Decode.map keyToInput
+        |> Decode.map inputToMsg
 
 
-keyDownToMsg : String -> Msg
-keyDownToMsg string =
+inputToMsg : Maybe ControlInput -> Msg
+inputToMsg maybeInput =
+    case maybeInput of
+        Just input ->
+            UpdateControl input
+
+        Nothing ->
+            None
+
+
+keyDownToInput : String -> Maybe ControlInput
+keyDownToInput string =
     case string of
         "ArrowLeft" ->
-            Rotate Left
+            Just <| Rotate (Just Left)
 
         "ArrowRight" ->
-            Rotate Right
+            Just <| Rotate (Just Right)
 
         "ArrowUp" ->
-            Accelerate True
+            Just <| Thrust True
 
-        "Space" ->
-            Shoot True
+        "KeyZ" ->
+            Just <| Shoot True
 
         "ShiftLeft" ->
-            Shield True
+            Just <| Shield True
 
         _ ->
-            None
+            Nothing
 
 
-keyUpToMsg : String -> Msg
-keyUpToMsg string =
+keyUpToInput : String -> Maybe ControlInput
+keyUpToInput string =
     case string of
+        "ArrowLeft" ->
+            Just <| Rotate Nothing
+
+        "ArrowRight" ->
+            Just <| Rotate Nothing
+
         "ShiftLeft" ->
-            Shield False
+            Just <| Shield False
 
         "ArrowUp" ->
-            Accelerate False
+            Just <| Thrust False
 
-        "Space" ->
-            Shoot False
+        "KeyZ" ->
+            Just <| Shoot False
 
         _ ->
-            None
+            Nothing
 
 
 
